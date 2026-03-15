@@ -506,7 +506,7 @@ async function renderInfoMessage(guild) {
 /* =========================
    READY + INFO SCHEDULER
 ========================= */
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`✅ Бот запущений як ${client.user.tag}`);
 
   // Оновлення InfoDogan раз на 10 хв (без флуду)
