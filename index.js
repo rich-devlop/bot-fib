@@ -589,13 +589,21 @@ if (!isAdmin && !hasDisciplineAccess(mem)) {
     return interaction.reply({ content: '❌ Команда доступна лише на сервері.', ephemeral: true });
   }
 
-  const punishChannel = PUNISH_CHANNEL_ID
-    ? await client.channels.fetch(PUNISH_CHANNEL_ID).catch(() => null)
-    : null;
+console.log('ENV PUNISH_CHANNEL_ID raw =', process.env.PUNISH_CHANNEL_ID);
+console.log('PUNISH_CHANNEL_ID =', PUNISH_CHANNEL_ID);
 
-  if (!punishChannel) {
-    return interaction.reply({ content: '❌ Не знайдено канал для покарань. Перевір PUNISH_CHANNEL_ID.', ephemeral: true });
-  }
+const punishChannel = PUNISH_CHANNEL_ID
+  ? await interaction.guild.channels.fetch(PUNISH_CHANNEL_ID).catch(() => null)
+  : null;
+
+console.log('punishChannel found =', !!punishChannel);
+
+if (!punishChannel) {
+  return interaction.reply({
+    content: `❌ Не знайдено канал для покарань. ID: ${PUNISH_CHANNEL_ID || 'empty'}`,
+    ephemeral: true
+  });
+}
 
   const targetUser = interaction.options.getUser('user', true);
   const reason = interaction.options.getString('reason', true);
