@@ -1,3 +1,4 @@
+console.log('NEW VERSION LOADED');
 require('dotenv').config();
 const Database = require('better-sqlite3');
 const {
