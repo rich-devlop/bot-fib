@@ -5,6 +5,9 @@ const {
   GatewayIntentBits,
   EmbedBuilder,
   PermissionsBitField,
+  REST,
+  Routes,
+  SlashCommandBuilder,
 } = require('discord.js');
 
 /* =========================
@@ -38,7 +41,10 @@ CREATE TABLE IF NOT EXISTS settings (
 `);
 
 const SQL = {
-  getRow: db.prepare(`SELECT * FROM punishments WHERE guild_id=? AND user_id=?`),
+  getRow: db.prepare(`
+    SELECT * FROM punishments
+    WHERE guild_id=? AND user_id=?
+  `),
 
   createRow: db.prepare(`
     INSERT OR IGNORE INTO punishments (guild_id, user_id, oral_start, strict_start, reattest_start)
@@ -81,9 +87,15 @@ const SQL = {
     WHERE guild_id=? AND user_id=?
   `),
 
-  listUsers: db.prepare(`SELECT user_id FROM punishments WHERE guild_id=?`),
+  listUsers: db.prepare(`
+    SELECT user_id FROM punishments
+    WHERE guild_id=?
+  `),
 
-  getSetting: db.prepare(`SELECT value FROM settings WHERE guild_id=? AND key=?`),
+  getSetting: db.prepare(`
+    SELECT value FROM settings
+    WHERE guild_id=? AND key=?
+  `),
 
   setSetting: db.prepare(`
     INSERT INTO settings (guild_id, key, value)
@@ -100,6 +112,7 @@ function envId(key) {
 }
 
 const GUILD_ID = envId('GUILD_ID');
+const CLIENT_ID = envId('CLIENT_ID');
 const PUNISH_CHANNEL_ID = envId('PUNISH_CHANNEL_ID');
 const INFO_CHANNEL_ID = envId('INFO_CHANNEL_ID');
 const EVIDENCE_CHANNEL_ID = envId('EVIDENCE_CHANNEL_ID');
@@ -122,7 +135,6 @@ const ROLES = {
 const COLOR = {
   punish: 0xE74C3C,
   unpunish: 0x2ECC71,
-  info: 0x3498DB,
 };
 
 const MS = {
@@ -152,6 +164,11 @@ function getBotIconUrl() {
   }
 }
 
+function isPassed(startMs, durationMs) {
+  if (!startMs) return false;
+  return (Date.now() - startMs) >= durationMs;
+}
+
 function hasDisciplineAccess(member) {
   const allowed = (process.env.DISCIPLINE_ROLES || '')
     .split(',')
@@ -160,11 +177,6 @@ function hasDisciplineAccess(member) {
 
   if (!allowed.length) return false;
   return member.roles.cache.some(role => allowed.includes(role.id));
-}
-
-function isPassed(startMs, durationMs) {
-  if (!startMs) return false;
-  return (Date.now() - startMs) >= durationMs;
 }
 
 async function silentAck(interaction) {
@@ -179,6 +191,75 @@ async function silentAck(interaction) {
 function ensureDbRow(guildId, userId) {
   SQL.createRow.run(guildId, userId);
   return SQL.getRow.get(guildId, userId);
+}
+
+/* =========================
+   SLASH COMMANDS REGISTER
+========================= */
+async function registerSlashCommands() {
+  if (!CLIENT_ID || !GUILD_ID || !process.env.DISCORD_TOKEN) {
+    console.log('⏭ Пропускаю реєстрацію команд: немає CLIENT_ID / GUILD_ID / DISCORD_TOKEN');
+    return;
+  }
+
+  const commands = [
+    new SlashCommandBuilder()
+      .setName('dogan')
+      .setDescription('Видати дисциплінарне стягнення')
+      .addStringOption(option =>
+        option
+          .setName('type')
+          .setDescription('Тип стягнення')
+          .setRequired(true)
+          .addChoices(
+            { name: 'Усна догана', value: 'oral' },
+            { name: 'Сувора догана', value: 'strict' },
+            { name: 'Переатестація', value: 'reattest' }
+          ))
+      .addUserOption(option =>
+        option
+          .setName('user')
+          .setDescription('Користувач')
+          .setRequired(true))
+      .addStringOption(option =>
+        option
+          .setName('reason')
+          .setDescription('Причина')
+          .setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('undogan')
+      .setDescription('Зняти дисциплінарне стягнення')
+      .addUserOption(option =>
+        option
+          .setName('user')
+          .setDescription('Користувач')
+          .setRequired(true))
+      .addStringOption(option =>
+        option
+          .setName('type')
+          .setDescription('Що саме зняти')
+          .setRequired(true)
+          .setAutocomplete(true))
+      .addStringOption(option =>
+        option
+          .setName('reason')
+          .setDescription('Причина зняття')
+          .setRequired(true)),
+  ];
+
+  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+
+  try {
+    console.log('🔁 Реєструю slash-команди...');
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      { body: commands.map(cmd => cmd.toJSON()) }
+    );
+    console.log('✅ Slash-команди зареєстровані');
+  } catch (error) {
+    console.error('❌ Помилка реєстрації команд:', error);
+  }
 }
 
 /* =========================
@@ -258,7 +339,6 @@ function syncStartsWithCurrentState(guildId, userId, state) {
 async function applyIncrement(member, type) {
   const oral = getOralLevel(member);
   const strict = getStrictLevel(member);
-  const reattest = hasReattest(member);
 
   let typeLine = '';
   let systemNote = '';
@@ -266,22 +346,23 @@ async function applyIncrement(member, type) {
   if (type === 'reattest') {
     await setReattest(member, true);
     typeLine = 'Переатестація';
-    return { typeLine, systemNote: '' };
+    return { typeLine, systemNote };
   }
 
   if (type === 'oral') {
     if (strict > 0) {
       const nextStrict = Math.min(3, strict + 1);
+      await setOralLevel(member, 0);
       await setStrictLevel(member, nextStrict);
 
-      if (nextStrict === 2) {
+      if (nextStrict === 1) {
+        typeLine = 'Сувора догана (1/3)';
+      } else if (nextStrict === 2) {
         typeLine = 'Сувора догана (2/3)';
         systemNote = 'Пониження в посаді';
-      } else if (nextStrict === 3) {
+      } else {
         typeLine = 'Сувора догана (3/3)';
         systemNote = 'Звільнення';
-      } else {
-        typeLine = 'Сувора догана (1/3)';
       }
 
       return { typeLine, systemNote };
@@ -290,21 +371,14 @@ async function applyIncrement(member, type) {
     if (oral === 0) {
       await setOralLevel(member, 1);
       typeLine = 'Усна догана (1/2)';
-      return { typeLine, systemNote: '' };
+      return { typeLine, systemNote };
     }
 
-    if (oral === 1) {
+    if (oral === 1 || oral === 2) {
       await setOralLevel(member, 0);
       await setStrictLevel(member, 1);
       typeLine = 'Усна догана (2/2) → Сувора догана (1/3)';
-      return { typeLine, systemNote: '' };
-    }
-
-    if (oral === 2) {
-      await setOralLevel(member, 0);
-      await setStrictLevel(member, 1);
-      typeLine = 'Усна догана (2/2) → Сувора догана (1/3)';
-      return { typeLine, systemNote: '' };
+      return { typeLine, systemNote };
     }
   }
 
@@ -315,20 +389,15 @@ async function applyIncrement(member, type) {
 
     if (nextStrict === 1) {
       typeLine = 'Сувора догана (1/3)';
-      return { typeLine, systemNote: '' };
-    }
-
-    if (nextStrict === 2) {
+    } else if (nextStrict === 2) {
       typeLine = 'Сувора догана (2/3)';
       systemNote = 'Пониження в посаді';
-      return { typeLine, systemNote };
-    }
-
-    if (nextStrict === 3) {
+    } else {
       typeLine = 'Сувора догана (3/3)';
       systemNote = 'Звільнення';
-      return { typeLine, systemNote };
     }
+
+    return { typeLine, systemNote };
   }
 
   return {
@@ -475,7 +544,9 @@ async function getOrCreateInfoMessage(guild) {
     if (msg) return msg;
   }
 
-  const msg = await infoChannel.send({ content: '⏳ Завантажую Info-Dogan...' });
+  const msg = await infoChannel.send({ content: '⏳ Завантажую Info-Dogan...' }).catch(() => null);
+  if (!msg) return null;
+
   SQL.setSetting.run(guild.id, 'info_message_id', String(msg.id));
   return msg;
 }
@@ -497,12 +568,7 @@ async function renderInfoMessage(guild) {
 
     if (oral === 0 && strict === 0 && !reattest) continue;
 
-    syncStartsWithCurrentState(guild.id, member.id, {
-      oral,
-      strict,
-      reattest,
-    });
-
+    syncStartsWithCurrentState(guild.id, member.id, { oral, strict, reattest });
     const fresh = SQL.getRow.get(guild.id, member.id) || {};
     const items = [];
 
@@ -520,6 +586,7 @@ async function renderInfoMessage(guild) {
       if (strict === 2) {
         line += ` — **Пониження в посаді**`;
       }
+
       if (strict === 3) {
         line += ` — **Звільнення**`;
       }
@@ -532,7 +599,7 @@ async function renderInfoMessage(guild) {
     }
 
     if (reattest) {
-      items.push(`Переатестація`);
+      items.push('Переатестація');
     }
 
     blocks.push(
@@ -545,7 +612,10 @@ async function renderInfoMessage(guild) {
     `**Info-Dogan — активні дисциплінарні стягнення**\n` +
     `Оновлено: **${formatTime()}**\n\n`;
 
-  const body = blocks.length ? blocks.join('\n\n') : '✅ Немає активних дисциплінарних стягнень.';
+  const body = blocks.length
+    ? blocks.join('\n\n')
+    : '✅ Немає активних дисциплінарних стягнень.';
+
   await infoMsg.edit({ content: (header + body).slice(0, 1900) }).catch(() => {});
 }
 
@@ -554,6 +624,8 @@ async function renderInfoMessage(guild) {
 ========================= */
 client.once('clientReady', async () => {
   console.log(`✅ Бот запущений як ${client.user.tag}`);
+
+  await registerSlashCommands();
 
   setInterval(async () => {
     try {
@@ -624,19 +696,19 @@ client.on('interactionCreate', async (interaction) => {
   const cmd = interaction.commandName;
   if (cmd !== 'dogan' && cmd !== 'undogan') return;
 
+  if (!interaction.guild) {
+    return interaction.reply({
+      content: '❌ Команда доступна лише на сервері.',
+      ephemeral: true,
+    });
+  }
+
   const mem = interaction.member;
   const isAdmin = mem.permissions.has(PermissionsBitField.Flags.Administrator);
 
   if (!isAdmin && !hasDisciplineAccess(mem)) {
     return interaction.reply({
       content: '❌ У вас немає доступу до дисциплінарної системи.',
-      ephemeral: true,
-    });
-  }
-
-  if (!interaction.guild) {
-    return interaction.reply({
-      content: '❌ Команда доступна лише на сервері.',
       ephemeral: true,
     });
   }
@@ -666,14 +738,14 @@ client.on('interactionCreate', async (interaction) => {
   const issuerId = interaction.user.id;
 
   if (cmd === 'dogan') {
-    const type = interaction.options.getString('type', true); // oral / strict / reattest
+    const type = interaction.options.getString('type', true);
 
     let res;
     try {
       res = await applyIncrement(targetMember, type);
     } catch (e) {
       return interaction.reply({
-        content: '❌ Не вдалося змінити ролі. Перевір Manage Roles та позицію ролі бота.',
+        content: '❌ Не вдалося змінити ролі. Перевір Manage Roles і позицію ролі бота.',
         ephemeral: true,
       });
     }
@@ -748,7 +820,7 @@ client.on('interactionCreate', async (interaction) => {
       res = await applyDecrement(targetMember, token);
     } catch (e) {
       return interaction.reply({
-        content: '❌ Не вдалося змінити ролі. Перевір Manage Roles та позицію ролі бота.',
+        content: '❌ Не вдалося змінити ролі. Перевір Manage Roles і позицію ролі бота.',
         ephemeral: true,
       });
     }
