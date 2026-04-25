@@ -289,44 +289,35 @@ function parseBadgeData(member) {
   };
 }
 
-function buildBadgeModal(member) {
-  const data = parseBadgeData(member);
+function buildBadgeModal(member, department='Police Academy') {
 
-  const modal = new ModalBuilder()
-    .setCustomId('badge_modal')
-    .setTitle('Отримання жетона LSPD');
+const data = parseBadgeData(member);
 
-  const departmentInput = new TextInputBuilder()
-    .setCustomId('department')
-    .setLabel('Відділ')
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setPlaceholder('Police Academy / CPD / IAD / PAI / DB / S.W.A.T.')
-    .setValue(data.department || '');
+const modal = new ModalBuilder()
+.setCustomId(`badge_modal_${department}`)
+.setTitle('Оформлення жетона');
 
-  const nameInput = new TextInputBuilder()
-    .setCustomId('fullName')
-    .setLabel("Ім'я та прізвище")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setPlaceholder('Наприклад: Ethan Reaper')
-    .setValue(data.fullName || '');
+const nameInput = new TextInputBuilder()
+.setCustomId('fullName')
+.setLabel("Ім'я та прізвище")
+.setStyle(TextInputStyle.Short)
+.setRequired(true)
+.setValue(data.fullName || '');
 
-  const staticInput = new TextInputBuilder()
-    .setCustomId('staticId')
-    .setLabel('Статичний ID')
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setPlaceholder('Наприклад: 62864')
-    .setValue(data.staticId || '');
+const staticInput = new TextInputBuilder()
+.setCustomId('staticId')
+.setLabel('Статичний ID')
+.setStyle(TextInputStyle.Short)
+.setRequired(true)
+.setValue(data.staticId || '');
 
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(departmentInput),
-    new ActionRowBuilder().addComponents(nameInput),
-    new ActionRowBuilder().addComponents(staticInput),
-  );
+modal.addComponents(
+new ActionRowBuilder().addComponents(nameInput),
+new ActionRowBuilder().addComponents(staticInput)
+);
 
-  return modal;
+return modal;
+
 }
 
 function buildBadgeText({ userId, department, fullName, staticId }) {
@@ -337,19 +328,38 @@ function buildBadgeText({ userId, department, fullName, staticId }) {
 }
 
 async function sendBadgePanel(channel) {
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('badge_get')
-      .setLabel('Отримати жетон')
-      .setStyle(ButtonStyle.Primary)
-  );
 
-  return channel.send({
-    content:
-      `**Отримання жетона LSPD**\n` +
-      `Натисніть кнопку нижче, перевірте дані та підтвердіть відправку.`,
-    components: [row],
-  });
+const row = new ActionRowBuilder()
+.addComponents(
+new ButtonBuilder()
+.setCustomId('badge_get')
+.setLabel('Отримати жетон')
+.setStyle(ButtonStyle.Primary)
+);
+
+const embed = new EmbedBuilder()
+.setColor(0x1f2b3a)
+.setTitle('Жетон LSPD')
+.addFields(
+{
+name:'Жетон:',
+value:
+'```' +
+'/do На грудях висить жетон: [LSPD | Police Academy | Ім’я Прізвище | 12345].' +
+'```'
+},
+{
+name:'Примітка:',
+value:
+'Якщо ім’я, прізвище, статик або відділ вказані невірно — натисніть "Отримати жетон" повторно та внесіть правильні дані.'
+}
+);
+
+return channel.send({
+embeds:[embed],
+components:[row]
+});
+
 }
 
 /* =========================
@@ -817,26 +827,78 @@ client.once('clientReady', async () => {
 ========================= */
 client.on('interactionCreate', async (interaction) => {
   /* ---------- BADGE BUTTON ---------- */
-  if (interaction.isButton()) {
-    if (interaction.customId !== 'badge_get') return;
+if (interaction.isButton()) {
 
-    if (!interaction.guild) {
-      return interaction.reply({
-        content: '❌ Ця кнопка доступна лише на сервері.',
-        ephemeral: true,
-      });
-    }
+if(interaction.customId==="badge_get"){
 
-    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-    if (!member) {
-      return interaction.reply({
-        content: '❌ Не можу знайти Ваш профіль на сервері.',
-        ephemeral: true,
-      });
-    }
+const row = new ActionRowBuilder()
+.addComponents(
+new ButtonBuilder()
+.setCustomId('dep_PA')
+.setLabel('Police Academy')
+.setStyle(ButtonStyle.Secondary),
 
-    return interaction.showModal(buildBadgeModal(member));
-  }
+new ButtonBuilder()
+.setCustomId('dep_CPD')
+.setLabel('CPD')
+.setStyle(ButtonStyle.Secondary),
+
+new ButtonBuilder()
+.setCustomId('dep_IAD')
+.setLabel('IAD')
+.setStyle(ButtonStyle.Secondary),
+
+new ButtonBuilder()
+.setCustomId('dep_PAI')
+.setLabel('PAI')
+.setStyle(ButtonStyle.Secondary),
+
+new ButtonBuilder()
+.setCustomId('dep_DB')
+.setLabel('DB')
+.setStyle(ButtonStyle.Secondary)
+);
+
+const row2 = new ActionRowBuilder()
+.addComponents(
+new ButtonBuilder()
+.setCustomId('dep_SWAT')
+.setLabel('S.W.A.T.')
+.setStyle(ButtonStyle.Danger)
+);
+
+return interaction.reply({
+content:'Оберіть відділ:',
+components:[row,row2],
+ephemeral:true
+});
+}
+
+if(interaction.customId.startsWith('dep_')){
+
+const member=await interaction.guild.members.fetch(
+interaction.user.id
+);
+
+const depMap={
+dep_PA:'Police Academy',
+dep_CPD:'CPD',
+dep_IAD:'IAD',
+dep_PAI:'PAI',
+dep_DB:'DB',
+dep_SWAT:'S.W.A.T.'
+};
+
+return interaction.showModal(
+buildBadgeModal(
+member,
+depMap[interaction.customId]
+)
+);
+
+}
+
+}
 
   /* ---------- BADGE MODAL ---------- */
   if (interaction.isModalSubmit()) {
@@ -853,21 +915,45 @@ client.on('interactionCreate', async (interaction) => {
       });
     }
 
-    await interaction.channel.send({
-      content: buildBadgeText({
-        userId: interaction.user.id,
-        department,
-        fullName,
-        staticId,
-      }),
-      allowedMentions: { users: [interaction.user.id] },
-    });
+const department=
+interaction.customId.replace(
+'badge_modal_',
+''
+);
 
-    return interaction.reply({
-      content: '✅ Жетон сформовано.',
-      ephemeral: true,
-    });
-  }
+const fullName=
+interaction.fields.getTextInputValue('fullName');
+
+const staticId=
+interaction.fields.getTextInputValue('staticId');
+
+const embed = new EmbedBuilder()
+.setColor(0x1f2b3a)
+.setTitle('Жетон')
+.addFields(
+{
+name:'Жетон:',
+value:
+'```' +
+`/do На грудях висить жетон: [LSPD | ${department} | ${fullName} | ${staticId}].` +
+'```'
+},
+{
+name:'Примітка:',
+value:
+'Якщо дані введені невірно — натисніть "Отримати жетон" повторно.'
+}
+);
+
+await interaction.channel.send({
+content:`||<@${interaction.user.id}>||`,
+embeds:[embed]
+});
+
+return interaction.reply({
+content:'✅ Жетон видано.',
+ephemeral:true
+});
 
   /* ---------- AUTOCOMPLETE ---------- */
   if (interaction.isAutocomplete()) {
