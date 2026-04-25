@@ -1,6 +1,9 @@
 console.log('NEW VERSION LOADED');
+
 require('dotenv').config();
+
 const Database = require('better-sqlite3');
+
 const {
   Client,
   GatewayIntentBits,
@@ -9,17 +12,26 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require('discord.js');
 
 /* =========================
    CLIENT
 ========================= */
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+  ],
 });
 
 /* =========================
-   DB (SQLite)
+   DB
 ========================= */
 const db = new Database('./lespere_discipline.sqlite');
 
@@ -53,38 +65,32 @@ const SQL = {
   `),
 
   setOralStart: db.prepare(`
-    UPDATE punishments
-    SET oral_start=?
+    UPDATE punishments SET oral_start=?
     WHERE guild_id=? AND user_id=?
   `),
 
   setStrictStart: db.prepare(`
-    UPDATE punishments
-    SET strict_start=?
+    UPDATE punishments SET strict_start=?
     WHERE guild_id=? AND user_id=?
   `),
 
   setReattestStart: db.prepare(`
-    UPDATE punishments
-    SET reattest_start=?
+    UPDATE punishments SET reattest_start=?
     WHERE guild_id=? AND user_id=?
   `),
 
   clearOralStart: db.prepare(`
-    UPDATE punishments
-    SET oral_start=NULL
+    UPDATE punishments SET oral_start=NULL
     WHERE guild_id=? AND user_id=?
   `),
 
   clearStrictStart: db.prepare(`
-    UPDATE punishments
-    SET strict_start=NULL
+    UPDATE punishments SET strict_start=NULL
     WHERE guild_id=? AND user_id=?
   `),
 
   clearReattestStart: db.prepare(`
-    UPDATE punishments
-    SET reattest_start=NULL
+    UPDATE punishments SET reattest_start=NULL
     WHERE guild_id=? AND user_id=?
   `),
 
@@ -106,7 +112,7 @@ const SQL = {
 };
 
 /* =========================
-   ENV / IDs
+   ENV
 ========================= */
 function envId(key) {
   return (process.env[key] || '').trim();
@@ -114,9 +120,12 @@ function envId(key) {
 
 const GUILD_ID = envId('GUILD_ID');
 const CLIENT_ID = envId('CLIENT_ID');
+
 const PUNISH_CHANNEL_ID = envId('PUNISH_CHANNEL_ID');
 const INFO_CHANNEL_ID = envId('INFO_CHANNEL_ID');
 const EVIDENCE_CHANNEL_ID = envId('EVIDENCE_CHANNEL_ID');
+const BADGE_CHANNEL_ID = envId('BADGE_CHANNEL_ID');
+
 const EVIDENCE_FORM_URL = (process.env.EVIDENCE_FORM_URL || '').trim();
 const BRAND_NAME = (process.env.BOT_BRAND_NAME || 'Lespere Discipline').trim();
 
@@ -195,7 +204,161 @@ function ensureDbRow(guildId, userId) {
 }
 
 /* =========================
-   SLASH COMMANDS REGISTER
+   BADGE / TOKEN SYSTEM
+========================= */
+function cleanNicknameName(text) {
+  return String(text || '')
+    .replace(/[_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseBadgeData(member) {
+  const raw =
+    member.nickname ||
+    member.user.globalName ||
+    member.user.username ||
+    '';
+
+  let text = String(raw).trim();
+
+  text = text
+    .replace(/[🟢🔴🟡🟣🔵⚫⚪🟠🟤⭐🌟]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  let staticId = '';
+
+  const hashMatch = text.match(/#\s*(\d{2,10})/);
+  if (hashMatch) {
+    staticId = hashMatch[1];
+  } else {
+    const lastNumberMatch = text.match(/(\d{2,10})\s*$/);
+    if (lastNumberMatch) staticId = lastNumberMatch[1];
+  }
+
+  text = text
+    .replace(/#\s*\d{2,10}/g, '')
+    .replace(/\|\s*\d{2,10}\s*$/g, '')
+    .replace(/\s+\d{2,10}\s*$/g, '')
+    .trim();
+
+  let department = '';
+  let fullName = '';
+
+  if (text.includes('|')) {
+    const parts = text
+      .split('|')
+      .map(x => x.trim())
+      .filter(Boolean);
+
+    department = parts[0] || '';
+    fullName = parts[1] || '';
+  } else {
+    const parts = text.split(' ').filter(Boolean);
+    department = parts[0] || '';
+    fullName = parts.slice(1).join(' ');
+  }
+
+  fullName = cleanNicknameName(fullName);
+
+  return {
+    department,
+    fullName,
+    staticId,
+  };
+}
+
+async function getOrCreateBadgeMessage(guild) {
+  if (!BADGE_CHANNEL_ID) return;
+
+  const channel = await client.channels.fetch(BADGE_CHANNEL_ID).catch(() => null);
+  if (!channel) return;
+
+  const stored = SQL.getSetting.get(guild.id, 'badge_message_id')?.value || null;
+
+  if (stored) {
+    const msg = await channel.messages.fetch(stored).catch(() => null);
+    if (msg) return msg;
+  }
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('badge_get')
+      .setLabel('Отримати жетон')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const msg = await channel.send({
+    content:
+      `**Жетон LSPD**\n\n` +
+      `Натисніть кнопку нижче, щоб отримати готовий RP-текст жетона.\n` +
+      `Дані можна буде перевірити та відредагувати перед відправкою.`,
+    components: [row],
+  }).catch(() => null);
+
+  if (!msg) return;
+
+  SQL.setSetting.run(guild.id, 'badge_message_id', String(msg.id));
+  return msg;
+}
+
+function buildBadgeModal(member) {
+  const data = parseBadgeData(member);
+
+  const modal = new ModalBuilder()
+    .setCustomId('badge_modal')
+    .setTitle('Отримання жетона');
+
+  const departmentInput = new TextInputBuilder()
+    .setCustomId('department')
+    .setLabel('Відділ')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder('Наприклад: CPD, IAD, Police Academy')
+    .setValue(data.department || '');
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId('fullName')
+    .setLabel("Ім'я та прізвище")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder('Наприклад: Ethan Reaper')
+    .setValue(data.fullName || '');
+
+  const staticInput = new TextInputBuilder()
+    .setCustomId('staticId')
+    .setLabel('Статичний ID')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder('Наприклад: 62864')
+    .setValue(data.staticId || '');
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(departmentInput),
+    new ActionRowBuilder().addComponents(nameInput),
+    new ActionRowBuilder().addComponents(staticInput),
+  );
+
+  return modal;
+}
+
+function buildBadgeText({ userId, department, fullName, staticId }) {
+  return [
+    `||<@${userId}>||`,
+    '',
+    `**Жетон:**`,
+    '```',
+    `/do На грудях висить жетон: [LSPD | ${department} | ${fullName} | ${staticId}].`,
+    '```',
+    '',
+    `**Примітка:**`,
+    `Якщо Ви ввели ім'я, прізвище, статик або відділ неправильно — натисніть ще раз "Отримати жетон" та вкажіть вірні дані.`,
+  ].join('\n');
+}
+
+/* =========================
+   SLASH COMMANDS
 ========================= */
 async function registerSlashCommands() {
   if (!CLIENT_ID || !GUILD_ID || !process.env.DISCORD_TOKEN) {
@@ -262,7 +425,6 @@ async function registerSlashCommands() {
     console.error('❌ Помилка реєстрації команд:', error);
   }
 }
-
 /* =========================
    ROLE HELPERS
 ========================= */
@@ -570,6 +732,7 @@ async function renderInfoMessage(guild) {
     if (oral === 0 && strict === 0 && !reattest) continue;
 
     syncStartsWithCurrentState(guild.id, member.id, { oral, strict, reattest });
+
     const fresh = SQL.getRow.get(guild.id, member.id) || {};
     const items = [];
 
@@ -628,6 +791,15 @@ client.once('clientReady', async () => {
 
   await registerSlashCommands();
 
+  if (GUILD_ID) {
+    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+
+    if (guild) {
+      await renderInfoMessage(guild);
+      await getOrCreateBadgeMessage(guild);
+    }
+  }
+
   setInterval(async () => {
     try {
       if (!GUILD_ID) return;
@@ -638,17 +810,68 @@ client.once('clientReady', async () => {
       console.error('Info-Dogan update error:', e?.message || e);
     }
   }, 10 * 60_000);
-
-  if (GUILD_ID) {
-    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
-    if (guild) await renderInfoMessage(guild);
-  }
 });
 
 /* =========================
    INTERACTIONS
 ========================= */
 client.on('interactionCreate', async (interaction) => {
+  /* ---------- BADGE BUTTON ---------- */
+  if (interaction.isButton()) {
+    if (interaction.customId !== 'badge_get') return;
+
+    if (!interaction.guild) {
+      return interaction.reply({
+        content: '❌ Ця кнопка доступна лише на сервері.',
+        ephemeral: true,
+      });
+    }
+
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member) {
+      return interaction.reply({
+        content: '❌ Не можу знайти Ваш профіль на сервері.',
+        ephemeral: true,
+      });
+    }
+
+    const modal = buildBadgeModal(member);
+    return interaction.showModal(modal);
+  }
+
+  /* ---------- BADGE MODAL ---------- */
+  if (interaction.isModalSubmit()) {
+    if (interaction.customId !== 'badge_modal') return;
+
+    const department = interaction.fields.getTextInputValue('department').trim();
+    const fullName = interaction.fields.getTextInputValue('fullName').trim();
+    const staticId = interaction.fields.getTextInputValue('staticId').trim();
+
+    if (!department || !fullName || !staticId) {
+      return interaction.reply({
+        content: '❌ Заповніть всі поля.',
+        ephemeral: true,
+      });
+    }
+
+    const text = buildBadgeText({
+      userId: interaction.user.id,
+      department,
+      fullName,
+      staticId,
+    });
+
+    await interaction.channel.send({
+      content: text,
+      allowedMentions: { users: [interaction.user.id] },
+    });
+
+    return interaction.reply({
+      content: '✅ Жетон сформовано.',
+      ephemeral: true,
+    });
+  }
+
   /* ---------- AUTOCOMPLETE ---------- */
   if (interaction.isAutocomplete()) {
     if (interaction.commandName !== 'undogan') return;
@@ -742,6 +965,7 @@ client.on('interactionCreate', async (interaction) => {
     const type = interaction.options.getString('type', true);
 
     let res;
+
     try {
       res = await applyIncrement(targetMember, type);
     } catch (e) {
@@ -817,6 +1041,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     let res;
+
     try {
       res = await applyDecrement(targetMember, token);
     } catch (e) {
@@ -859,5 +1084,6 @@ client.on('interactionCreate', async (interaction) => {
    START
 ========================= */
 client.login(process.env.DISCORD_TOKEN);
+
 process.on('unhandledRejection', (err) => console.error('UnhandledRejection:', err));
 process.on('uncaughtException', (err) => console.error('UncaughtException:', err));
