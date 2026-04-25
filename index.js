@@ -169,13 +169,13 @@ function getBotIconUrl() {
   try {
     return client.user.displayAvatarURL({ extension: 'png', size: 256 });
   } catch {
-    return client.user.displayAvatarURL({ format: 'png', size: 256 });
+    return null;
   }
 }
 
 function isPassed(startMs, durationMs) {
   if (!startMs) return false;
-  return (Date.now() - startMs) >= durationMs;
+  return Date.now() - startMs >= durationMs;
 }
 
 function hasDisciplineAccess(member) {
@@ -194,6 +194,7 @@ async function silentAck(interaction) {
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply({ ephemeral: true });
     }
+
     await interaction.deleteReply().catch(() => {});
   } catch {}
 }
@@ -203,8 +204,26 @@ function ensureDbRow(guildId, userId) {
   return SQL.getRow.get(guildId, userId);
 }
 
+async function safeSend(channel, payload, label = 'channel.send') {
+  try {
+    return await channel.send(payload);
+  } catch (e) {
+    console.error(`❌ ${label}:`, e?.message || e);
+    return null;
+  }
+}
+
+async function safeEdit(message, payload, label = 'message.edit') {
+  try {
+    return await message.edit(payload);
+  } catch (e) {
+    console.error(`❌ ${label}:`, e?.message || e);
+    return null;
+  }
+}
+
 /* =========================
-   BADGE / TOKEN SYSTEM
+   BADGE SYSTEM
 ========================= */
 function cleanNicknameName(text) {
   return String(text || '')
@@ -279,87 +298,72 @@ function parseBadgeData(member) {
     fullName = parts.slice(1).join(' ');
   }
 
-  department = normalizeDepartment(department);
-  fullName = cleanNicknameName(fullName);
-
   return {
-    department,
-    fullName,
+    department: normalizeDepartment(department),
+    fullName: cleanNicknameName(fullName),
     staticId,
   };
 }
 
-function buildBadgeModal(member, department='Police Academy') {
+function buildBadgeModal(member, department = 'Police Academy') {
+  const data = parseBadgeData(member);
 
-const data = parseBadgeData(member);
+  const modal = new ModalBuilder()
+    .setCustomId(`badge_modal_${department}`)
+    .setTitle('Оформлення жетона');
 
-const modal = new ModalBuilder()
-.setCustomId(`badge_modal_${department}`)
-.setTitle('Оформлення жетона');
+  const nameInput = new TextInputBuilder()
+    .setCustomId('fullName')
+    .setLabel("Ім'я та прізвище")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setValue(data.fullName || '');
 
-const nameInput = new TextInputBuilder()
-.setCustomId('fullName')
-.setLabel("Ім'я та прізвище")
-.setStyle(TextInputStyle.Short)
-.setRequired(true)
-.setValue(data.fullName || '');
+  const staticInput = new TextInputBuilder()
+    .setCustomId('staticId')
+    .setLabel('Статичний ID')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setValue(data.staticId || '');
 
-const staticInput = new TextInputBuilder()
-.setCustomId('staticId')
-.setLabel('Статичний ID')
-.setStyle(TextInputStyle.Short)
-.setRequired(true)
-.setValue(data.staticId || '');
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(nameInput),
+    new ActionRowBuilder().addComponents(staticInput),
+  );
 
-modal.addComponents(
-new ActionRowBuilder().addComponents(nameInput),
-new ActionRowBuilder().addComponents(staticInput)
-);
-
-return modal;
-
-}
-
-function buildBadgeText({ userId, department, fullName, staticId }) {
-  return [
-    `||<@${userId}>||`,
-    `/do На грудях висить жетон: [LSPD | ${department} | ${fullName} | ${staticId}].`,
-  ].join('\n');
+  return modal;
 }
 
 async function sendBadgePanel(channel) {
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('badge_get')
+      .setLabel('Отримати жетон')
+      .setStyle(ButtonStyle.Primary),
+  );
 
-const row = new ActionRowBuilder()
-.addComponents(
-new ButtonBuilder()
-.setCustomId('badge_get')
-.setLabel('Отримати жетон')
-.setStyle(ButtonStyle.Primary)
-);
+  const embed = new EmbedBuilder()
+    .setColor(0x1f2b3a)
+    .setTitle('Жетон LSPD')
+    .addFields(
+      {
+        name: 'Жетон:',
+        value:
+          '```' +
+          '/do На грудях висить жетон: [LSPD | Police Academy | Ім’я Прізвище | 12345].' +
+          '```',
+      },
+      {
+        name: 'Примітка:',
+        value:
+          'Якщо ім’я, прізвище, статик або відділ вказані невірно — натисніть "Отримати жетон" повторно та внесіть правильні дані.',
+      },
+    );
 
-const embed = new EmbedBuilder()
-.setColor(0x1f2b3a)
-.setTitle('Жетон LSPD')
-.addFields(
-{
-name:'Жетон:',
-value:
-'```' +
-'/do На грудях висить жетон: [LSPD | Police Academy | Ім’я Прізвище | 12345].' +
-'```'
-},
-{
-name:'Примітка:',
-value:
-'Якщо ім’я, прізвище, статик або відділ вказані невірно — натисніть "Отримати жетон" повторно та внесіть правильні дані.'
-}
-);
-
-return channel.send({
-embeds:[embed],
-components:[row]
-});
-
+  return safeSend(channel, {
+    embeds: [embed],
+    components: [row],
+  }, 'sendBadgePanel');
 }
 
 /* =========================
@@ -383,7 +387,7 @@ async function registerSlashCommands() {
           .addChoices(
             { name: 'Усна догана', value: 'oral' },
             { name: 'Сувора догана', value: 'strict' },
-            { name: 'Переатестація', value: 'reattest' }
+            { name: 'Переатестація', value: 'reattest' },
           ))
       .addUserOption(option =>
         option
@@ -431,11 +435,11 @@ async function registerSlashCommands() {
     console.log('🔁 Реєструю slash-команди...');
     await rest.put(
       Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-      { body: commands.map(cmd => cmd.toJSON()) }
+      { body: commands.map(cmd => cmd.toJSON()) },
     );
     console.log('✅ Slash-команди зареєстровані');
   } catch (error) {
-    console.error('❌ Помилка реєстрації команд:', error);
+    console.error('❌ Помилка реєстрації команд:', error?.message || error);
   }
 }
 
@@ -479,15 +483,17 @@ async function setStrictLevel(member, level) {
 
 async function setReattest(member, on) {
   if (!ROLES.reattest) return;
+
   if (on) await member.roles.add(ROLES.reattest);
   else await member.roles.remove(ROLES.reattest).catch(() => {});
 }
 
 /* =========================
-   DB START SYNC
+   DB SYNC
 ========================= */
 function syncStartsWithCurrentState(guildId, userId, state) {
   ensureDbRow(guildId, userId);
+
   const row = SQL.getRow.get(guildId, userId);
   const t = nowMs();
 
@@ -522,13 +528,16 @@ async function applyIncrement(member, type) {
 
   if (type === 'reattest') {
     await setReattest(member, true);
-    typeLine = 'Переатестація';
-    return { typeLine, systemNote };
+    return {
+      typeLine: 'Переатестація',
+      systemNote,
+    };
   }
 
   if (type === 'oral') {
     if (strict > 0) {
       const nextStrict = Math.min(3, strict + 1);
+
       await setOralLevel(member, 0);
       await setStrictLevel(member, nextStrict);
 
@@ -547,20 +556,26 @@ async function applyIncrement(member, type) {
 
     if (oral === 0) {
       await setOralLevel(member, 1);
-      typeLine = 'Усна догана (1/2)';
-      return { typeLine, systemNote };
+      return {
+        typeLine: 'Усна догана (1/2)',
+        systemNote,
+      };
     }
 
-    if (oral === 1 || oral === 2) {
+    if (oral >= 1) {
       await setOralLevel(member, 0);
       await setStrictLevel(member, 1);
-      typeLine = 'Усна догана (2/2) → Сувора догана (1/3)';
-      return { typeLine, systemNote };
+
+      return {
+        typeLine: 'Усна догана (2/2) → Сувора догана (1/3)',
+        systemNote,
+      };
     }
   }
 
   if (type === 'strict') {
     const nextStrict = Math.min(3, strict + 1);
+
     await setOralLevel(member, 0);
     await setStrictLevel(member, nextStrict);
 
@@ -634,18 +649,20 @@ function buildEmbed({ title, kind, issuerId, targetId, reason, typeLine, systemN
 
   const emb = new EmbedBuilder()
     .setTitle(title)
-    .setColor(COLOR[kind] ?? 0x95A5A6)
-    .setThumbnail(botIconUrl);
+    .setColor(COLOR[kind] ?? 0x95A5A6);
 
-  if (botName && botIconUrl) {
+  if (botIconUrl) {
+    emb.setThumbnail(botIconUrl);
     emb.setAuthor({ name: botName, iconURL: botIconUrl });
+  } else {
+    emb.setAuthor({ name: botName });
   }
 
   emb.addFields(
     { name: 'Хто видав', value: `<@${issuerId}>`, inline: false },
     { name: 'Кому видано', value: `<@${targetId}>`, inline: false },
-    { name: 'Тип стягнення', value: typeLine, inline: false },
-    { name: 'Причина', value: reason, inline: false },
+    { name: 'Тип стягнення', value: typeLine || 'Не вказано', inline: false },
+    { name: 'Причина', value: reason || 'Не вказано', inline: false },
     { name: 'Час', value: formatTime(), inline: false },
   );
 
@@ -663,13 +680,17 @@ function buildEmbed({ title, kind, issuerId, targetId, reason, typeLine, systemN
 async function postEvidenceCase({ issuerId, targetId, reason, typeLine, punishMsgUrl, systemNote }) {
   if (!EVIDENCE_CHANNEL_ID) return;
 
-  const evidenceChannel = await client.channels.fetch(EVIDENCE_CHANNEL_ID).catch(() => null);
+  const evidenceChannel = await client.channels.fetch(EVIDENCE_CHANNEL_ID).catch((e) => {
+    console.error('❌ Не можу отримати EVIDENCE_CHANNEL_ID:', e?.message || e);
+    return null;
+  });
+
   if (!evidenceChannel) return;
 
   const mentionUsers = [...new Set([issuerId, targetId].filter(Boolean))];
 
   const headerLines = [
-    `**Потрібне підтвердження дисциплінарного стягнення**`,
+    '**Потрібне підтвердження дисциплінарного стягнення**',
     `Кому: <@${targetId}>`,
     `Хто видав: <@${issuerId}>`,
     `Причина: **${reason}**`,
@@ -679,10 +700,10 @@ async function postEvidenceCase({ issuerId, targetId, reason, typeLine, punishMs
     EVIDENCE_FORM_URL ? `Форма / звіт: ${EVIDENCE_FORM_URL}` : null,
   ].filter(Boolean);
 
-  const msg = await evidenceChannel.send({
+  const msg = await safeSend(evidenceChannel, {
     content: headerLines.join('\n'),
     allowedMentions: { users: mentionUsers },
-  }).catch(() => null);
+  }, 'postEvidenceCase send');
 
   if (!msg) return;
 
@@ -693,16 +714,19 @@ async function postEvidenceCase({ issuerId, targetId, reason, typeLine, punishMs
     name: threadName,
     autoArchiveDuration: 1440,
     reason: 'Докази видачі стягнення',
-  }).catch(() => null);
+  }).catch((e) => {
+    console.error('❌ Не можу створити гілку доказів:', e?.message || e);
+    return null;
+  });
 
   if (!thread) return;
 
-  await thread.send({
+  await safeSend(thread, {
     content:
       `||<@${issuerId}>||, додайте, будь ласка, **докази** сюди.` +
       (punishMsgUrl ? `\n🔗 Повідомлення: ${punishMsgUrl}` : ''),
     allowedMentions: { users: [issuerId] },
-  }).catch(() => {});
+  }, 'postEvidenceCase thread.send');
 }
 
 /* =========================
@@ -710,18 +734,25 @@ async function postEvidenceCase({ issuerId, targetId, reason, typeLine, punishMs
 ========================= */
 async function getOrCreateInfoMessage(guild) {
   const infoChannel = INFO_CHANNEL_ID
-    ? await client.channels.fetch(INFO_CHANNEL_ID).catch(() => null)
+    ? await client.channels.fetch(INFO_CHANNEL_ID).catch((e) => {
+        console.error('❌ Не можу отримати INFO_CHANNEL_ID:', e?.message || e);
+        return null;
+      })
     : null;
 
   if (!infoChannel) return null;
 
   const stored = SQL.getSetting.get(guild.id, 'info_message_id')?.value || null;
+
   if (stored) {
     const msg = await infoChannel.messages.fetch(stored).catch(() => null);
     if (msg) return msg;
   }
 
-  const msg = await infoChannel.send({ content: '⏳ Завантажую Info-Dogan...' }).catch(() => null);
+  const msg = await safeSend(infoChannel, {
+    content: '⏳ Завантажую Info-Dogan...',
+  }, 'getOrCreateInfoMessage');
+
   if (!msg) return null;
 
   SQL.setSetting.run(guild.id, 'info_message_id', String(msg.id));
@@ -745,32 +776,33 @@ async function renderInfoMessage(guild) {
 
     if (oral === 0 && strict === 0 && !reattest) continue;
 
-    syncStartsWithCurrentState(guild.id, member.id, { oral, strict, reattest });
+    syncStartsWithCurrentState(guild.id, member.id, {
+      oral,
+      strict,
+      reattest,
+    });
 
     const fresh = SQL.getRow.get(guild.id, member.id) || {};
     const items = [];
 
     if (oral > 0) {
       let line = `Усна догана (${oral}/2)`;
+
       if (isPassed(fresh.oral_start, MS.DOGAN_DUE)) {
-        line += ` — ⚠️ **Пройшло 24 год, потрібно видати повторно**`;
+        line += ' — ⚠️ **Пройшло 24 год, потрібно видати повторно**';
       }
+
       items.push(line);
     }
 
     if (strict > 0) {
       let line = `Сувора догана (${strict}/3)`;
 
-      if (strict === 2) {
-        line += ` — **Пониження в посаді**`;
-      }
-
-      if (strict === 3) {
-        line += ` — **Звільнення**`;
-      }
+      if (strict === 2) line += ' — **Пониження в посаді**';
+      if (strict === 3) line += ' — **Звільнення**';
 
       if (isPassed(fresh.strict_start, MS.DOGAN_DUE)) {
-        line += ` — ⚠️ **Пройшло 24 год, потрібно видати повторно**`;
+        line += ' — ⚠️ **Пройшло 24 год, потрібно видати повторно**';
       }
 
       items.push(line);
@@ -782,39 +814,47 @@ async function renderInfoMessage(guild) {
 
     blocks.push(
       `> **<@${member.id}>**\n` +
-      items.map(x => `> • ${x}`).join('\n')
+      items.map(x => `> • ${x}`).join('\n'),
     );
   }
 
   const header =
-    `**Info-Dogan — активні дисциплінарні стягнення**\n` +
+    '**Info-Dogan — активні дисциплінарні стягнення**\n' +
     `Оновлено: **${formatTime()}**\n\n`;
 
   const body = blocks.length
     ? blocks.join('\n\n')
     : '✅ Немає активних дисциплінарних стягнень.';
 
-  await infoMsg.edit({ content: (header + body).slice(0, 1900) }).catch(() => {});
+  await safeEdit(infoMsg, {
+    content: (header + body).slice(0, 1900),
+  }, 'renderInfoMessage edit');
 }
 
 /* =========================
    READY
 ========================= */
-client.once('clientReady', async () => {
+client.once('ready', async () => {
   console.log(`✅ Бот запущений як ${client.user.tag}`);
 
   await registerSlashCommands();
 
   if (GUILD_ID) {
-    const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+    const guild = await client.guilds.fetch(GUILD_ID).catch((e) => {
+      console.error('❌ Не можу отримати guild:', e?.message || e);
+      return null;
+    });
+
     if (guild) await renderInfoMessage(guild);
   }
 
   setInterval(async () => {
     try {
       if (!GUILD_ID) return;
+
       const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
       if (!guild) return;
+
       await renderInfoMessage(guild);
     } catch (e) {
       console.error('Info-Dogan update error:', e?.message || e);
@@ -826,182 +866,241 @@ client.once('clientReady', async () => {
    INTERACTIONS
 ========================= */
 client.on('interactionCreate', async (interaction) => {
-  /* ---------- BADGE BUTTON ---------- */
-if (interaction.isButton()) {
+  try {
+    /* ---------- BUTTONS ---------- */
+    if (interaction.isButton()) {
+      if (interaction.customId === 'badge_get') {
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('dep_PA')
+            .setLabel('Police Academy')
+            .setStyle(ButtonStyle.Secondary),
 
-if(interaction.customId==="badge_get"){
+          new ButtonBuilder()
+            .setCustomId('dep_CPD')
+            .setLabel('CPD')
+            .setStyle(ButtonStyle.Secondary),
 
-const row = new ActionRowBuilder()
-.addComponents(
-new ButtonBuilder()
-.setCustomId('dep_PA')
-.setLabel('Police Academy')
-.setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('dep_IAD')
+            .setLabel('IAD')
+            .setStyle(ButtonStyle.Secondary),
 
-new ButtonBuilder()
-.setCustomId('dep_CPD')
-.setLabel('CPD')
-.setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('dep_PAI')
+            .setLabel('PAI')
+            .setStyle(ButtonStyle.Secondary),
 
-new ButtonBuilder()
-.setCustomId('dep_IAD')
-.setLabel('IAD')
-.setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId('dep_DB')
+            .setLabel('DB')
+            .setStyle(ButtonStyle.Secondary),
+        );
 
-new ButtonBuilder()
-.setCustomId('dep_PAI')
-.setLabel('PAI')
-.setStyle(ButtonStyle.Secondary),
+        const row2 = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('dep_SWAT')
+            .setLabel('S.W.A.T.')
+            .setStyle(ButtonStyle.Danger),
+        );
 
-new ButtonBuilder()
-.setCustomId('dep_DB')
-.setLabel('DB')
-.setStyle(ButtonStyle.Secondary)
-);
+        return interaction.reply({
+          content: 'Оберіть відділ:',
+          components: [row, row2],
+          ephemeral: true,
+        });
+      }
 
-const row2 = new ActionRowBuilder()
-.addComponents(
-new ButtonBuilder()
-.setCustomId('dep_SWAT')
-.setLabel('S.W.A.T.')
-.setStyle(ButtonStyle.Danger)
-);
+      if (interaction.customId.startsWith('dep_')) {
+        if (!interaction.guild) {
+          return interaction.reply({
+            content: '❌ Це можна використовувати лише на сервері.',
+            ephemeral: true,
+          });
+        }
 
-return interaction.reply({
-content:'Оберіть відділ:',
-components:[row,row2],
-ephemeral:true
-});
-}
+        const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
 
-if(interaction.customId.startsWith('dep_')){
+        if (!member) {
+          return interaction.reply({
+            content: '❌ Не можу знайти Ваш профіль на сервері.',
+            ephemeral: true,
+          });
+        }
 
-const member=await interaction.guild.members.fetch(
-interaction.user.id
-);
+        const depMap = {
+          dep_PA: 'Police Academy',
+          dep_CPD: 'CPD',
+          dep_IAD: 'IAD',
+          dep_PAI: 'PAI',
+          dep_DB: 'DB',
+          dep_SWAT: 'S.W.A.T.',
+        };
 
-const depMap={
-dep_PA:'Police Academy',
-dep_CPD:'CPD',
-dep_IAD:'IAD',
-dep_PAI:'PAI',
-dep_DB:'DB',
-dep_SWAT:'S.W.A.T.'
-};
+        const department = depMap[interaction.customId] || 'Police Academy';
 
-return interaction.showModal(
-buildBadgeModal(
-member,
-depMap[interaction.customId]
-)
-);
+        return interaction.showModal(buildBadgeModal(member, department));
+      }
 
-}
+      return;
+    }
 
-}
+    /* ---------- BADGE MODAL ---------- */
+    if (interaction.isModalSubmit()) {
+      if (!interaction.customId.startsWith('badge_modal_')) return;
 
-  /* ---------- BADGE MODAL ---------- */
-  if (interaction.isModalSubmit()) {
-    if (interaction.customId !== 'badge_modal') return;
+      const departmentRaw = interaction.customId.replace('badge_modal_', '');
+      const department = normalizeDepartment(departmentRaw);
 
-    const department = normalizeDepartment(interaction.fields.getTextInputValue('department').trim());
-    const fullName = cleanNicknameName(interaction.fields.getTextInputValue('fullName').trim());
-    const staticId = interaction.fields.getTextInputValue('staticId').trim();
+      const fullName = cleanNicknameName(
+        interaction.fields.getTextInputValue('fullName'),
+      );
 
-    if (!department || !fullName || !staticId) {
+      const staticId = interaction.fields
+        .getTextInputValue('staticId')
+        .trim();
+
+      if (!department || !fullName || !staticId) {
+        return interaction.reply({
+          content: '❌ Заповніть всі поля.',
+          ephemeral: true,
+        });
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor(0x1f2b3a)
+        .setTitle('Жетон')
+        .addFields(
+          {
+            name: 'Жетон:',
+            value:
+              '```' +
+              `/do На грудях висить жетон: [LSPD | ${department} | ${fullName} | ${staticId}].` +
+              '```',
+          },
+          {
+            name: 'Примітка:',
+            value:
+              'Якщо дані введені невірно — натисніть "Отримати жетон" повторно.',
+          },
+        );
+
+      await safeSend(interaction.channel, {
+        content: `||<@${interaction.user.id}>||`,
+        embeds: [embed],
+        allowedMentions: { users: [interaction.user.id] },
+      }, 'badge modal channel.send');
+
       return interaction.reply({
-        content: '❌ Заповніть всі поля.',
+        content: '✅ Жетон видано.',
         ephemeral: true,
       });
     }
 
-const department=
-interaction.customId.replace(
-'badge_modal_',
-''
-);
+    /* ---------- AUTOCOMPLETE ---------- */
+    if (interaction.isAutocomplete()) {
+      if (interaction.commandName !== 'undogan') return;
 
-const fullName=
-interaction.fields.getTextInputValue('fullName');
+      const focused = interaction.options.getFocused(true);
+      if (focused.name !== 'type') return;
 
-const staticId=
-interaction.fields.getTextInputValue('staticId');
+      const userOpt = interaction.options.get('user');
+      const userId = userOpt?.value;
 
-const embed = new EmbedBuilder()
-.setColor(0x1f2b3a)
-.setTitle('Жетон')
-.addFields(
-{
-name:'Жетон:',
-value:
-'```' +
-`/do На грудях висить жетон: [LSPD | ${department} | ${fullName} | ${staticId}].` +
-'```'
-},
-{
-name:'Примітка:',
-value:
-'Якщо дані введені невірно — натисніть "Отримати жетон" повторно.'
-}
-);
+      if (!userId || !interaction.guild) {
+        return interaction.respond([]);
+      }
 
-await interaction.channel.send({
-content:`||<@${interaction.user.id}>||`,
-embeds:[embed]
-});
+      const member = await interaction.guild.members.fetch({
+        user: userId,
+        force: true,
+      }).catch(() => null);
 
-return interaction.reply({
-content:'✅ Жетон видано.',
-ephemeral:true
-});
+      if (!member) {
+        return interaction.respond([]);
+      }
 
-  /* ---------- AUTOCOMPLETE ---------- */
-  if (interaction.isAutocomplete()) {
-    if (interaction.commandName !== 'undogan') return;
+      const items = [];
+      const oral = getOralLevel(member);
+      const strict = getStrictLevel(member);
+      const reattest = hasReattest(member);
 
-    const focused = interaction.options.getFocused(true);
-    if (focused.name !== 'type') return;
+      if (oral === 1) items.push({ name: 'Усна догана (1/2)', value: 'oral_1' });
+      if (oral === 2) items.push({ name: 'Усна догана (2/2)', value: 'oral_2' });
 
-    const userOpt = interaction.options.get('user');
-    const userId = userOpt?.value;
+      if (strict === 1) items.push({ name: 'Сувора догана (1/3)', value: 'strict_1' });
+      if (strict === 2) items.push({ name: 'Сувора догана (2/3)', value: 'strict_2' });
+      if (strict === 3) items.push({ name: 'Сувора догана (3/3)', value: 'strict_3' });
 
-    if (!userId || !interaction.guild) {
-      return interaction.respond([]);
+      if (reattest) items.push({ name: 'Переатестація', value: 'reattest' });
+
+      if (!items.length) {
+        return interaction.respond([
+          { name: 'Немає активних стягнень', value: 'none' },
+        ]);
+      }
+
+      const q = String(focused.value || '').toLowerCase();
+
+      return interaction.respond(
+        items
+          .filter(x => x.name.toLowerCase().includes(q))
+          .slice(0, 25),
+      );
     }
 
-    const member = await interaction.guild.members.fetch({ user: userId, force: true }).catch(() => null);
-    if (!member) {
-      return interaction.respond([]);
+    /* ---------- COMMANDS ---------- */
+    if (!interaction.isChatInputCommand()) return;
+
+    if (interaction.commandName === 'badge') {
+      if (!interaction.guild) {
+        return interaction.reply({
+          content: '❌ Команда доступна лише на сервері.',
+          ephemeral: true,
+        });
+      }
+
+      const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+
+      if (!member) {
+        return interaction.reply({
+          content: '❌ Не можу знайти Ваш профіль на сервері.',
+          ephemeral: true,
+        });
+      }
+
+      return interaction.showModal(buildBadgeModal(member));
     }
 
-    const items = [];
-    const oral = getOralLevel(member);
-    const strict = getStrictLevel(member);
-    const reattest = hasReattest(member);
+    if (interaction.commandName === 'badgepanel') {
+      if (!interaction.guild) {
+        return interaction.reply({
+          content: '❌ Команда доступна лише на сервері.',
+          ephemeral: true,
+        });
+      }
 
-    if (oral === 1) items.push({ name: 'Усна догана (1/2)', value: 'oral_1' });
-    if (oral === 2) items.push({ name: 'Усна догана (2/2)', value: 'oral_2' });
+      const mem = interaction.member;
+      const isAdmin = mem.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    if (strict === 1) items.push({ name: 'Сувора догана (1/3)', value: 'strict_1' });
-    if (strict === 2) items.push({ name: 'Сувора догана (2/3)', value: 'strict_2' });
-    if (strict === 3) items.push({ name: 'Сувора догана (3/3)', value: 'strict_3' });
+      if (!isAdmin) {
+        return interaction.reply({
+          content: '❌ Цю команду може використовувати лише адміністрація.',
+          ephemeral: true,
+        });
+      }
 
-    if (reattest) items.push({ name: 'Переатестація', value: 'reattest' });
+      await sendBadgePanel(interaction.channel);
 
-    if (!items.length) {
-      return interaction.respond([{ name: 'Немає активних стягнень', value: 'none' }]);
+      return interaction.reply({
+        content: '✅ Панель жетонів створена.',
+        ephemeral: true,
+      });
     }
 
-    const q = String(focused.value || '').toLowerCase();
-    return interaction.respond(
-      items.filter(x => x.name.toLowerCase().includes(q)).slice(0, 25)
-    );
-  }
+    const cmd = interaction.commandName;
+    if (cmd !== 'dogan' && cmd !== 'undogan') return;
 
-  /* ---------- COMMANDS ---------- */
-  if (!interaction.isChatInputCommand()) return;
-
-  if (interaction.commandName === 'badge') {
     if (!interaction.guild) {
       return interaction.reply({
         content: '❌ Команда доступна лише на сервері.',
@@ -1009,196 +1108,194 @@ ephemeral:true
       });
     }
 
-    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-    if (!member) {
-      return interaction.reply({
-        content: '❌ Не можу знайти Ваш профіль на сервері.',
-        ephemeral: true,
-      });
-    }
-
-    return interaction.showModal(buildBadgeModal(member));
-  }
-
-  if (interaction.commandName === 'badgepanel') {
     const mem = interaction.member;
     const isAdmin = mem.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    if (!isAdmin) {
+    if (!isAdmin && !hasDisciplineAccess(mem)) {
       return interaction.reply({
-        content: '❌ Цю команду може використовувати лише адміністрація.',
+        content: '❌ У вас немає доступу до дисциплінарної системи.',
         ephemeral: true,
       });
     }
 
-    await sendBadgePanel(interaction.channel);
+    const punishChannel = PUNISH_CHANNEL_ID
+      ? await interaction.guild.channels.fetch(PUNISH_CHANNEL_ID).catch((e) => {
+          console.error('❌ Не можу отримати PUNISH_CHANNEL_ID:', e?.message || e);
+          return null;
+        })
+      : null;
 
-    return interaction.reply({
-      content: '✅ Панель жетонів створена.',
-      ephemeral: true,
-    });
-  }
-
-  const cmd = interaction.commandName;
-  if (cmd !== 'dogan' && cmd !== 'undogan') return;
-
-  if (!interaction.guild) {
-    return interaction.reply({
-      content: '❌ Команда доступна лише на сервері.',
-      ephemeral: true,
-    });
-  }
-
-  const mem = interaction.member;
-  const isAdmin = mem.permissions.has(PermissionsBitField.Flags.Administrator);
-
-  if (!isAdmin && !hasDisciplineAccess(mem)) {
-    return interaction.reply({
-      content: '❌ У вас немає доступу до дисциплінарної системи.',
-      ephemeral: true,
-    });
-  }
-
-  const punishChannel = PUNISH_CHANNEL_ID
-    ? await interaction.guild.channels.fetch(PUNISH_CHANNEL_ID).catch(() => null)
-    : null;
-
-  if (!punishChannel) {
-    return interaction.reply({
-      content: `❌ Не знайдено канал для стягнень. ID: ${PUNISH_CHANNEL_ID || 'empty'}`,
-      ephemeral: true,
-    });
-  }
-
-  const targetUser = interaction.options.getUser('user', true);
-  const reason = interaction.options.getString('reason', true);
-
-  const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
-  if (!targetMember) {
-    return interaction.reply({
-      content: '❌ Не можу знайти цього учасника на сервері.',
-      ephemeral: true,
-    });
-  }
-
-  const issuerId = interaction.user.id;
-
-  if (cmd === 'dogan') {
-    const type = interaction.options.getString('type', true);
-
-    let res;
-
-    try {
-      res = await applyIncrement(targetMember, type);
-    } catch (e) {
+    if (!punishChannel) {
       return interaction.reply({
-        content: '❌ Не вдалося змінити ролі. Перевір Manage Roles і позицію ролі бота.',
+        content: `❌ Не знайдено канал для стягнень. ID: ${PUNISH_CHANNEL_ID || 'empty'}`,
         ephemeral: true,
       });
     }
 
-    const oral = getOralLevel(targetMember);
-    const strict = getStrictLevel(targetMember);
-    const reattest = hasReattest(targetMember);
+    const targetUser = interaction.options.getUser('user', true);
+    const reason = interaction.options.getString('reason', true);
 
-    syncStartsWithCurrentState(interaction.guild.id, targetMember.id, {
-      oral,
-      strict,
-      reattest,
-    });
+    const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
 
-    if (type === 'oral') {
-      if (strict > 0) {
+    if (!targetMember) {
+      return interaction.reply({
+        content: '❌ Не можу знайти цього учасника на сервері.',
+        ephemeral: true,
+      });
+    }
+
+    const issuerId = interaction.user.id;
+
+    if (cmd === 'dogan') {
+      const type = interaction.options.getString('type', true);
+
+      let res;
+
+      try {
+        res = await applyIncrement(targetMember, type);
+      } catch (e) {
+        console.error('❌ Role add/remove error:', e?.message || e);
+
+        return interaction.reply({
+          content: '❌ Не вдалося змінити ролі. Перевір Manage Roles і позицію ролі бота.',
+          ephemeral: true,
+        });
+      }
+
+      const oral = getOralLevel(targetMember);
+      const strict = getStrictLevel(targetMember);
+      const reattest = hasReattest(targetMember);
+
+      syncStartsWithCurrentState(interaction.guild.id, targetMember.id, {
+        oral,
+        strict,
+        reattest,
+      });
+
+      if (type === 'oral') {
+        if (strict > 0) {
+          SQL.clearOralStart.run(interaction.guild.id, targetMember.id);
+          SQL.setStrictStart.run(nowMs(), interaction.guild.id, targetMember.id);
+        } else if (oral > 0) {
+          SQL.setOralStart.run(nowMs(), interaction.guild.id, targetMember.id);
+        }
+      }
+
+      if (type === 'strict') {
         SQL.clearOralStart.run(interaction.guild.id, targetMember.id);
         SQL.setStrictStart.run(nowMs(), interaction.guild.id, targetMember.id);
-      } else if (oral > 0) {
-        SQL.setOralStart.run(nowMs(), interaction.guild.id, targetMember.id);
       }
-    }
 
-    if (type === 'strict') {
-      SQL.clearOralStart.run(interaction.guild.id, targetMember.id);
-      SQL.setStrictStart.run(nowMs(), interaction.guild.id, targetMember.id);
-    }
+      if (type === 'reattest') {
+        SQL.setReattestStart.run(nowMs(), interaction.guild.id, targetMember.id);
+      }
 
-    if (type === 'reattest') {
-      SQL.setReattestStart.run(nowMs(), interaction.guild.id, targetMember.id);
-    }
+      const punishMsg = await safeSend(punishChannel, {
+        content: `||<@${targetUser.id}>||`,
+        embeds: [
+          buildEmbed({
+            title: 'Дисциплінарне стягнення',
+            kind: 'punish',
+            issuerId,
+            targetId: targetUser.id,
+            reason,
+            typeLine: res.typeLine,
+            systemNote: res.systemNote,
+          }),
+        ],
+        allowedMentions: { users: [targetUser.id] },
+      }, 'dogan punishChannel.send');
 
-    const punishMsg = await punishChannel.send({
-      content: `||<@${targetUser.id}>||`,
-      embeds: [buildEmbed({
-        title: 'Дисциплінарне стягнення',
-        kind: 'punish',
+      if (!punishMsg) {
+        return interaction.reply({
+          content: '❌ Бот не зміг написати в канал стягнень. Перевір права каналу.',
+          ephemeral: true,
+        });
+      }
+
+      await postEvidenceCase({
         issuerId,
         targetId: targetUser.id,
         reason,
         typeLine: res.typeLine,
         systemNote: res.systemNote,
-      })],
-      allowedMentions: { users: [targetUser.id] },
-    });
-
-    await postEvidenceCase({
-      issuerId,
-      targetId: targetUser.id,
-      reason,
-      typeLine: res.typeLine,
-      systemNote: res.systemNote,
-      punishMsgUrl: punishMsg.url,
-    });
-
-    await renderInfoMessage(interaction.guild);
-    return silentAck(interaction);
-  }
-
-  if (cmd === 'undogan') {
-    const token = interaction.options.getString('type', true);
-
-    if (token === 'none') {
-      return interaction.reply({
-        content: 'ℹ️ У користувача немає активних стягнень.',
-        ephemeral: true,
+        punishMsgUrl: punishMsg.url,
       });
+
+      await renderInfoMessage(interaction.guild);
+
+      return silentAck(interaction);
     }
 
-    let res;
+    if (cmd === 'undogan') {
+      const token = interaction.options.getString('type', true);
 
-    try {
-      res = await applyDecrement(targetMember, token);
-    } catch (e) {
-      return interaction.reply({
-        content: '❌ Не вдалося змінити ролі. Перевір Manage Roles і позицію ролі бота.',
-        ephemeral: true,
+      if (token === 'none') {
+        return interaction.reply({
+          content: 'ℹ️ У користувача немає активних стягнень.',
+          ephemeral: true,
+        });
+      }
+
+      let res;
+
+      try {
+        res = await applyDecrement(targetMember, token);
+      } catch (e) {
+        console.error('❌ Role add/remove error:', e?.message || e);
+
+        return interaction.reply({
+          content: '❌ Не вдалося змінити ролі. Перевір Manage Roles і позицію ролі бота.',
+          ephemeral: true,
+        });
+      }
+
+      const oral = getOralLevel(targetMember);
+      const strict = getStrictLevel(targetMember);
+      const reattest = hasReattest(targetMember);
+
+      syncStartsWithCurrentState(interaction.guild.id, targetMember.id, {
+        oral,
+        strict,
+        reattest,
       });
+
+      const msg = await safeSend(punishChannel, {
+        content: `||<@${targetUser.id}>||`,
+        embeds: [
+          buildEmbed({
+            title: 'Зняття дисциплінарного стягнення',
+            kind: 'unpunish',
+            issuerId,
+            targetId: targetUser.id,
+            reason,
+            typeLine: res.typeLine,
+            systemNote: '',
+          }),
+        ],
+        allowedMentions: { users: [targetUser.id] },
+      }, 'undogan punishChannel.send');
+
+      if (!msg) {
+        return interaction.reply({
+          content: '❌ Бот не зміг написати в канал стягнень. Перевір права каналу.',
+          ephemeral: true,
+        });
+      }
+
+      await renderInfoMessage(interaction.guild);
+
+      return silentAck(interaction);
     }
+  } catch (e) {
+    console.error('❌ interactionCreate error:', e?.message || e);
 
-    const oral = getOralLevel(targetMember);
-    const strict = getStrictLevel(targetMember);
-    const reattest = hasReattest(targetMember);
-
-    syncStartsWithCurrentState(interaction.guild.id, targetMember.id, {
-      oral,
-      strict,
-      reattest,
-    });
-
-    await punishChannel.send({
-      content: `||<@${targetUser.id}>||`,
-      embeds: [buildEmbed({
-        title: 'Зняття дисциплінарного стягнення',
-        kind: 'unpunish',
-        issuerId,
-        targetId: targetUser.id,
-        reason,
-        typeLine: res.typeLine,
-        systemNote: '',
-      })],
-      allowedMentions: { users: [targetUser.id] },
-    });
-
-    await renderInfoMessage(interaction.guild);
-    return silentAck(interaction);
+    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: '❌ Виникла помилка при обробці дії.',
+        ephemeral: true,
+      }).catch(() => {});
+    }
   }
 });
 
@@ -1207,5 +1304,10 @@ ephemeral:true
 ========================= */
 client.login(process.env.DISCORD_TOKEN);
 
-process.on('unhandledRejection', (err) => console.error('UnhandledRejection:', err));
-process.on('uncaughtException', (err) => console.error('UncaughtException:', err));
+process.on('unhandledRejection', (err) => {
+  console.error('UnhandledRejection:', err);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('UncaughtException:', err);
+});
