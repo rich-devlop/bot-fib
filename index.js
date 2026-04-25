@@ -305,12 +305,21 @@ function parseBadgeData(member) {
   };
 }
 
+function buildBadgeButtonRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('badge_get')
+      .setLabel('Створити бейдж')
+      .setStyle(ButtonStyle.Secondary),
+  );
+}
+
 function buildBadgeModal(member, department = 'Police Academy') {
   const data = parseBadgeData(member);
 
   const modal = new ModalBuilder()
     .setCustomId(`badge_modal_${department}`)
-    .setTitle('Оформлення жетона');
+    .setTitle('Оформлення бейджа');
 
   const nameInput = new TextInputBuilder()
     .setCustomId('fullName')
@@ -335,13 +344,6 @@ function buildBadgeModal(member, department = 'Police Academy') {
 }
 
 async function sendBadgePanel(channel) {
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('badge_get')
-      .setLabel('Отримати жетон')
-      .setStyle(ButtonStyle.Primary),
-  );
-
   const embed = new EmbedBuilder()
     .setColor(0x1f2b3a)
     .setTitle('Жетон LSPD')
@@ -356,13 +358,13 @@ async function sendBadgePanel(channel) {
       {
         name: 'Примітка:',
         value:
-          'Якщо ім’я, прізвище, статик або відділ вказані невірно — натисніть "Отримати жетон" повторно та внесіть правильні дані.',
+          'Натисніть кнопку **"Створити бейдж"**, оберіть відділ та введіть свої дані.',
       },
     );
 
   return safeSend(channel, {
     embeds: [embed],
-    components: [row],
+    components: [buildBadgeButtonRow()],
   }, 'sendBadgePanel');
 }
 
@@ -422,11 +424,11 @@ async function registerSlashCommands() {
 
     new SlashCommandBuilder()
       .setName('badge')
-      .setDescription('Отримати жетон LSPD'),
+      .setDescription('Створити бейдж LSPD'),
 
     new SlashCommandBuilder()
       .setName('badgepanel')
-      .setDescription('Створити панель отримання жетона'),
+      .setDescription('Створити панель бейджів'),
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -905,7 +907,7 @@ client.on('interactionCreate', async (interaction) => {
         );
 
         return interaction.reply({
-          content: 'Оберіть відділ:',
+          content: 'Оберіть відділ для бейджа:',
           components: [row, row2],
           ephemeral: true,
         });
@@ -981,18 +983,19 @@ client.on('interactionCreate', async (interaction) => {
           {
             name: 'Примітка:',
             value:
-              'Якщо дані введені невірно — натисніть "Отримати жетон" повторно.',
+              'Якщо дані введені невірно — натисніть **"Створити бейдж"** повторно.',
           },
         );
 
       await safeSend(interaction.channel, {
         content: `||<@${interaction.user.id}>||`,
         embeds: [embed],
+        components: [buildBadgeButtonRow()],
         allowedMentions: { users: [interaction.user.id] },
       }, 'badge modal channel.send');
 
       return interaction.reply({
-        content: '✅ Жетон видано.',
+        content: '✅ Бейдж створено.',
         ephemeral: true,
       });
     }
@@ -1093,7 +1096,7 @@ client.on('interactionCreate', async (interaction) => {
       await sendBadgePanel(interaction.channel);
 
       return interaction.reply({
-        content: '✅ Панель жетонів створена.',
+        content: '✅ Панель бейджів створена.',
         ephemeral: true,
       });
     }
