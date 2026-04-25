@@ -124,9 +124,8 @@ const CLIENT_ID = envId('CLIENT_ID');
 const PUNISH_CHANNEL_ID = envId('PUNISH_CHANNEL_ID');
 const INFO_CHANNEL_ID = envId('INFO_CHANNEL_ID');
 const EVIDENCE_CHANNEL_ID = envId('EVIDENCE_CHANNEL_ID');
-const BADGE_CHANNEL_ID = envId('BADGE_CHANNEL_ID');
-
 const EVIDENCE_FORM_URL = (process.env.EVIDENCE_FORM_URL || '').trim();
+
 const BRAND_NAME = (process.env.BOT_BRAND_NAME || 'Lespere Discipline').trim();
 
 const ROLES = {
@@ -186,6 +185,7 @@ function hasDisciplineAccess(member) {
     .filter(Boolean);
 
   if (!allowed.length) return false;
+
   return member.roles.cache.some(role => allowed.includes(role.id));
 }
 
@@ -208,9 +208,30 @@ function ensureDbRow(guildId, userId) {
 ========================= */
 function cleanNicknameName(text) {
   return String(text || '')
-    .replace(/[_]+/g, ' ')
+    .replace(/_/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizeDepartment(department) {
+  const dep = String(department || '').trim();
+
+  const map = {
+    PA: 'Police Academy',
+    'P.A': 'Police Academy',
+    'P.A.': 'Police Academy',
+    ACADEMY: 'Police Academy',
+    CPD: 'CPD',
+    IAD: 'IAD',
+    PAI: 'PAI',
+    DB: 'DB',
+    SWAT: 'S.W.A.T.',
+    'S.W.A.T': 'S.W.A.T.',
+    'S.W.A.T.': 'S.W.A.T.',
+  };
+
+  const key = dep.toUpperCase().replace(/\s+/g, ' ').trim();
+  return map[key] || dep;
 }
 
 function parseBadgeData(member) {
@@ -220,10 +241,8 @@ function parseBadgeData(member) {
     member.user.username ||
     '';
 
-  let text = String(raw).trim();
-
-  text = text
-    .replace(/[🟢🔴🟡🟣🔵⚫⚪🟠🟤⭐🌟]/g, '')
+  let text = String(raw)
+    .replace(/[🟢🔴🟡🟣🔵⚫⚪🟠🟤⭐🌟🍀👑💎🔥🛡️]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -260,6 +279,7 @@ function parseBadgeData(member) {
     fullName = parts.slice(1).join(' ');
   }
 
+  department = normalizeDepartment(department);
   fullName = cleanNicknameName(fullName);
 
   return {
@@ -269,53 +289,19 @@ function parseBadgeData(member) {
   };
 }
 
-async function getOrCreateBadgeMessage(guild) {
-  if (!BADGE_CHANNEL_ID) return;
-
-  const channel = await client.channels.fetch(BADGE_CHANNEL_ID).catch(() => null);
-  if (!channel) return;
-
-  const stored = SQL.getSetting.get(guild.id, 'badge_message_id')?.value || null;
-
-  if (stored) {
-    const msg = await channel.messages.fetch(stored).catch(() => null);
-    if (msg) return msg;
-  }
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('badge_get')
-      .setLabel('Отримати жетон')
-      .setStyle(ButtonStyle.Primary)
-  );
-
-  const msg = await channel.send({
-    content:
-      `**Жетон LSPD**\n\n` +
-      `Натисніть кнопку нижче, щоб отримати готовий RP-текст жетона.\n` +
-      `Дані можна буде перевірити та відредагувати перед відправкою.`,
-    components: [row],
-  }).catch(() => null);
-
-  if (!msg) return;
-
-  SQL.setSetting.run(guild.id, 'badge_message_id', String(msg.id));
-  return msg;
-}
-
 function buildBadgeModal(member) {
   const data = parseBadgeData(member);
 
   const modal = new ModalBuilder()
     .setCustomId('badge_modal')
-    .setTitle('Отримання жетона');
+    .setTitle('Отримання жетона LSPD');
 
   const departmentInput = new TextInputBuilder()
     .setCustomId('department')
     .setLabel('Відділ')
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
-    .setPlaceholder('Наприклад: CPD, IAD, Police Academy')
+    .setPlaceholder('Police Academy / CPD / IAD / PAI / DB / S.W.A.T.')
     .setValue(data.department || '');
 
   const nameInput = new TextInputBuilder()
@@ -346,15 +332,24 @@ function buildBadgeModal(member) {
 function buildBadgeText({ userId, department, fullName, staticId }) {
   return [
     `||<@${userId}>||`,
-    '',
-    `**Жетон:**`,
-    '```',
     `/do На грудях висить жетон: [LSPD | ${department} | ${fullName} | ${staticId}].`,
-    '```',
-    '',
-    `**Примітка:**`,
-    `Якщо Ви ввели ім'я, прізвище, статик або відділ неправильно — натисніть ще раз "Отримати жетон" та вкажіть вірні дані.`,
   ].join('\n');
+}
+
+async function sendBadgePanel(channel) {
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('badge_get')
+      .setLabel('Отримати жетон')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  return channel.send({
+    content:
+      `**Отримання жетона LSPD**\n` +
+      `Натисніть кнопку нижче, перевірте дані та підтвердіть відправку.`,
+    components: [row],
+  });
 }
 
 /* =========================
@@ -410,6 +405,14 @@ async function registerSlashCommands() {
           .setName('reason')
           .setDescription('Причина зняття')
           .setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('badge')
+      .setDescription('Отримати жетон LSPD'),
+
+    new SlashCommandBuilder()
+      .setName('badgepanel')
+      .setDescription('Створити панель отримання жетона'),
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -425,6 +428,7 @@ async function registerSlashCommands() {
     console.error('❌ Помилка реєстрації команд:', error);
   }
 }
+
 /* =========================
    ROLE HELPERS
 ========================= */
@@ -793,11 +797,7 @@ client.once('clientReady', async () => {
 
   if (GUILD_ID) {
     const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
-
-    if (guild) {
-      await renderInfoMessage(guild);
-      await getOrCreateBadgeMessage(guild);
-    }
+    if (guild) await renderInfoMessage(guild);
   }
 
   setInterval(async () => {
@@ -835,16 +835,15 @@ client.on('interactionCreate', async (interaction) => {
       });
     }
 
-    const modal = buildBadgeModal(member);
-    return interaction.showModal(modal);
+    return interaction.showModal(buildBadgeModal(member));
   }
 
   /* ---------- BADGE MODAL ---------- */
   if (interaction.isModalSubmit()) {
     if (interaction.customId !== 'badge_modal') return;
 
-    const department = interaction.fields.getTextInputValue('department').trim();
-    const fullName = interaction.fields.getTextInputValue('fullName').trim();
+    const department = normalizeDepartment(interaction.fields.getTextInputValue('department').trim());
+    const fullName = cleanNicknameName(interaction.fields.getTextInputValue('fullName').trim());
     const staticId = interaction.fields.getTextInputValue('staticId').trim();
 
     if (!department || !fullName || !staticId) {
@@ -854,15 +853,13 @@ client.on('interactionCreate', async (interaction) => {
       });
     }
 
-    const text = buildBadgeText({
-      userId: interaction.user.id,
-      department,
-      fullName,
-      staticId,
-    });
-
     await interaction.channel.send({
-      content: text,
+      content: buildBadgeText({
+        userId: interaction.user.id,
+        department,
+        fullName,
+        staticId,
+      }),
       allowedMentions: { users: [interaction.user.id] },
     });
 
@@ -881,6 +878,7 @@ client.on('interactionCreate', async (interaction) => {
 
     const userOpt = interaction.options.get('user');
     const userId = userOpt?.value;
+
     if (!userId || !interaction.guild) {
       return interaction.respond([]);
     }
@@ -916,6 +914,44 @@ client.on('interactionCreate', async (interaction) => {
 
   /* ---------- COMMANDS ---------- */
   if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === 'badge') {
+    if (!interaction.guild) {
+      return interaction.reply({
+        content: '❌ Команда доступна лише на сервері.',
+        ephemeral: true,
+      });
+    }
+
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member) {
+      return interaction.reply({
+        content: '❌ Не можу знайти Ваш профіль на сервері.',
+        ephemeral: true,
+      });
+    }
+
+    return interaction.showModal(buildBadgeModal(member));
+  }
+
+  if (interaction.commandName === 'badgepanel') {
+    const mem = interaction.member;
+    const isAdmin = mem.permissions.has(PermissionsBitField.Flags.Administrator);
+
+    if (!isAdmin) {
+      return interaction.reply({
+        content: '❌ Цю команду може використовувати лише адміністрація.',
+        ephemeral: true,
+      });
+    }
+
+    await sendBadgePanel(interaction.channel);
+
+    return interaction.reply({
+      content: '✅ Панель жетонів створена.',
+      ephemeral: true,
+    });
+  }
 
   const cmd = interaction.commandName;
   if (cmd !== 'dogan' && cmd !== 'undogan') return;
