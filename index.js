@@ -31,11 +31,11 @@ const client = new Client({
 });
 
 /* =========================
-   DB
+   
 ========================= */
-const db = new Database('./lespere_discipline.sqlite');
+const  = new Database('./lespere_discipline.sqlite');
 
-db.exec(`
+.exec(`
 CREATE TABLE IF NOT EXISTS punishments (
   guild_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
@@ -935,7 +935,7 @@ client.on('interactionCreate', async (interaction) => {
           dep_CPD: 'CPD',
           dep_IAD: 'IAD',
           dep_PAI: 'PAI',
-          dep_DB: 'DB',
+          dep_DB: 'Detective Bureau',
           dep_SWAT: 'S.W.A.T.',
         };
 
