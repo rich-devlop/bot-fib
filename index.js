@@ -935,7 +935,7 @@ client.on('interactionCreate', async (interaction) => {
           dep_CPD: 'CPD',
           dep_IAD: 'IAD',
           dep_PAI: 'PAI',
-          dep_DB: 'Detective Bureau',
+          dep_DB: 'DB',
           dep_SWAT: 'S.W.A.T.',
         };
 
